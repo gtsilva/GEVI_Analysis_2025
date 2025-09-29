@@ -1,0 +1,3 @@
+GEVI,N_Events,N_ROIs,Amplitude_pct_Median,Amplitude_pct_95CI,Width_ms_Median,Width_ms_95CI,SNR_Median,SNR_95CI,Rate_Hz_Median,Rate_Hz_95CI,amplitude_Effect,amplitude_p_FDR,width_Effect,width_p_FDR,snr_Effect,snr_p_FDR,event_rate_Effect,event_rate_p_FDR
+ASAP6.2,238,3,11.25,"[9.87, 12.41]",5.36,"[5.29, 5.42]",176.92,"[154.04, 198.52]",0.86,"[0.49, 2.57]","-2.01 [-3.42, -0.39]",0.0008,"0.02 [-0.05, 0.11]",0.6571,"-64.98 [-91.19, -41.90]",0.0000,"1.54 [-1.69, 4.01]",0.6400
+ASAP6.3,636,4,9.24,"[8.65, 9.80]",5.38,"[5.33, 5.44]",111.94,"[101.29, 119.27]",2.40,"[0.68, 4.87]",,,,,,,,

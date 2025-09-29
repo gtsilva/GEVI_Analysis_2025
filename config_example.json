@@ -1,0 +1,18 @@
+{
+  "frame_rate": 1000.0,
+  "pixel_size": 1.0,
+  "exposure_ms": 1.0,
+  "illumination_power": 1.0,
+  "bleaching_window_min": 10.0,
+  "baseline_percentile": 10,
+  "baseline_window_sec": 2.0,
+  "artifact_threshold": 5.0,
+  "min_brightness": 100,
+  "max_motion": 2.0,
+  "min_events_per_roi": 3,
+  "winsorize_percentile": 2.5,
+  "bootstrap_n": 10000,
+  "alpha": 0.05,
+  "random_seed": 42,
+  "gevi_colors": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+}
