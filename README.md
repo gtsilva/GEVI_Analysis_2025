@@ -120,10 +120,10 @@ Data loading and instrumentation interface by **Shane Nichols** ([LinkedIn](http
 - Support for galvo scanning and camera acquisition modes
 - Temporal alignment and synchronization tools
 
-### Configuration
+## Configuration
 
-#### `config_example.json`
-Configuration file with analysis parameters:
+### `config_example.json`
+Example configuration file for `compare_gevis.py`:
 ```json
 {
   "frame_rate": 1000.0,
@@ -137,139 +137,56 @@ Configuration file with analysis parameters:
 
 ## Analysis Results
 
-The repository contains two complete analysis runs comparing ASAP voltage indicators:
+Two complete analysis runs are included comparing ASAP voltage indicators:
 
-### `gevi_comparison/` - Standard Analysis
-Comparison of ASAP4, ASAP6.2, and ASAP6.3 with standard parameters:
-- **Sample Size**: 4,034 events across 29 ROIs
-- **Generated**: September 25, 2025
-- **Bootstrap**: 10,000 iterations with BCa confidence intervals
+### `gevi_comparison/`
+Standard analysis of ASAP4, ASAP6.2, and ASAP6.3:
+- **Sample**: 4,034 events across 29 ROIs
+- **Date**: September 25, 2025
+- **Method**: 10,000 bootstrap iterations with BCa confidence intervals
 
-### `gevi_conservative_comparison/` - Conservative Analysis
-Same GEVI comparison using more stringent quality control parameters:
-- Demonstrates robustness of findings across parameter settings
-- Conservative thresholding and filtering criteria
+### `gevi_conservative_comparison/`
+Conservative analysis with more stringent quality control:
+- Demonstrates robustness across parameter settings
+- Stricter thresholding and filtering criteria
 
-### Contents of Each Results Directory:
-**Figures:**
-- `gevi_comparison_main.png/pdf/svg` - Main comparison figure with key metrics
-- `gevi_comparison_supplement.png/pdf` - Supplementary quality control analyses  
-- `gevi_spike_shape_comparison.png/pdf/svg` - Spike shape and kinetics overlay
+### Output Files (in each results directory):
+- **Figures**: `gevi_comparison_main.[png/pdf/svg]`, `gevi_comparison_supplement.[png/pdf]`, `gevi_spike_shape_comparison.[png/pdf/svg]`
+- **Data**: `summary_table.csv`, `per_event_metrics.csv`, `per_roi_metrics.csv`
+- **Metadata**: `statistical_results.json`, `run_metadata.json`, `analysis.log`, `README.txt`
 
-**Data Tables:**
-- `summary_table.csv` - Publication-ready summary with effect sizes and CIs
-- `per_event_metrics.csv` - Individual event measurements
-- `per_roi_metrics.csv` - Region-of-interest summary statistics
+## Metrics
 
-**Analysis Files:**
-- `statistical_results.json` - Complete statistical test results
-- `run_metadata.json` - Analysis parameters and metadata
-- `analysis.log` - Processing workflow log
-- `README.txt` - Methods and interpretation guide
+### Event-Level
+- **Amplitude**: ΔF/F (%) relative to baseline
+- **Width**: Event duration (ms)
+- **SNR**: Peak amplitude / baseline noise (MAD)
+- **Prominence**: Height above surrounding baseline
+- **AUC**: Integrated ΔF/F over time
 
-## Key Metrics Analyzed
-
-### Event-Level Metrics
-- Amplitude: ΔF/F (%) relative to baseline
-- Width: Event duration in milliseconds 
-- Signal-to-Noise Ratio: Peak amplitude divided by baseline noise (MAD)
-- Prominence: Height of peaks above surrounding baseline
-- Area Under Curve: Integrated ΔF/F over time
-
-### ROI-Level Metrics
-- Event Rate: Events per second per region of interest
-- Amplitude Variability: Coefficient of variation across events
-- Baseline Brightness: Median fluorescence intensity
-- Detection Consistency: Inter-quartile range of event metrics
-
-## Usage Examples
-
-### GEVI Performance Comparison
-```bash
-# Basic comparison of multiple GEVIs
-python compare_gevis.py \
-  --gevi1 ASAP6.2 /path/to/asap62/data \
-  --gevi2 ASAP6.3 /path/to/asap63/data \
-  --output results/comparison \
-  --config config_example.json
-
-# Three-way comparison with custom parameters
-python compare_gevis.py \
-  --gevi1 ASAP4 /data/asap4 \
-  --gevi2 ASAP6.2 /data/asap62 \
-  --gevi3 ASAP6.3 /data/asap63 \
-  --frame-rate 1000 \
-  --min-events 5 \
-  --bootstrap-n 20000 \
-  --output publication_results/
-```
-
-### Conservative Spike Detection
-```bash
-# Experimental data from RigDataV2
-python simple_conservative_extract_fluo.py \
-  --source rig \
-  --data-dir /path/to/experiment
-
-# TIFF stack analysis
-python simple_conservative_extract_fluo.py \
-  --source tiff \
-  --tif /path/to/stack.tif
-
-# Single trace file analysis
-python simple_conservative_extract_fluo.py \
-  --input trace.npy \
-  --fs 1000 \
-  --out_csv events.csv \
-  --out_plot diagnostics.png
-
-# CSV file with custom parameters
-python simple_conservative_extract_fluo.py \
-  --input trace.csv \
-  --fs 500 \
-  --column 2 \
-  --silent-sec 3 \
-  --th-mult 5 \
-  --min-width-ms 1
-```
-
-### Complete Fluorescence Extraction Pipeline
-```bash
-# RigDataV2 experimental data
-python extract_fluorescence_cellpose.py \
-  --source rig \
-  --data-dir /path/to/experiment \
-  --cellpose-model cyto2 \
-  --diameter 15 \
-  --register \
-  --neuropil-correction
-
-# TIFF stack processing
-python extract_fluorescence_cellpose.py \
-  --source tiff \
-  --tif /path/to/stack.tif \
-  --cellpose-model nuclei \
-  --diameter 20
-```
+### ROI-Level
+- **Event Rate**: Events per second per ROI
+- **Amplitude CV**: Coefficient of variation across events
+- **Baseline Brightness**: Median fluorescence intensity
+- **Detection Consistency**: Inter-quartile range of metrics
 
 ## Methods
 
 ### Statistical Analysis
-- Bootstrap Confidence Intervals: BCa method with configurable iterations
-- Nonparametric Tests: Mann-Whitney U, Kolmogorov-Smirnov
-- Effect Sizes: Cliff's delta and median differences with CIs
-- Multiple Comparisons: Benjamini-Hochberg FDR correction
+- Bootstrap confidence intervals (BCa method)
+- Nonparametric tests (Mann-Whitney U, Kolmogorov-Smirnov)
+- Effect sizes (Cliff's delta, median differences)
+- Multiple comparison correction (Benjamini-Hochberg FDR)
 
 ### Quality Control
-- MAD-based outlier detection and removal
+- MAD-based outlier detection
 - Winsorization of extreme values
-- Minimum event count per ROI filtering
-- Motion artifact detection and correction
+- Minimum event count filtering
+- Motion artifact correction
 
-### Data Analysis
-- Spike shape analysis using fluorescence traces
-- Event alignment by onset or peak detection
-- Temporal interpolation to common time grids
+### Spike Analysis
+- Event alignment (onset or peak)
+- Temporal interpolation to common time grid
 - Kinetics extraction (rise time, decay time, FWHM)
 
 ## Dependencies
