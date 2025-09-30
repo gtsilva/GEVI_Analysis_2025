@@ -234,6 +234,20 @@ def load_data(paths: Dict[str, Path], logger: logging.Logger) -> Tuple[pd.DataFr
     logger.info(f"Loaded {len(combined_df)} total events from {len(all_data)} files")
     logger.info(f"Found {len(real_events)} events with real trace data")
     
+    # Log real events per GEVI
+    from collections import Counter
+    real_events_by_gevi = Counter(ev['gevi'] for ev in real_events)
+    for gevi, count in sorted(real_events_by_gevi.items()):
+        logger.info(f"  {gevi}: {count} events with trace data")
+    
+    # Check which GEVIs have no trace data
+    all_gevis = set(paths.keys())
+    gevis_with_traces = set(real_events_by_gevi.keys())
+    gevis_without_traces = all_gevis - gevis_with_traces
+    if gevis_without_traces:
+        logger.warning(f"No trace data found for: {', '.join(sorted(gevis_without_traces))}")
+        logger.warning("Spike shape figure will only include GEVIs with trace data.")
+    
     return combined_df, real_events
 
 
@@ -444,7 +458,10 @@ def calculate_event_metrics(df: pd.DataFrame, config: Dict, logger: logging.Logg
         baseline_mad = df.groupby(['experiment', 'roi'])['baseline'].transform(
             lambda x: stats.median_abs_deviation(x, nan_policy='omit')
         )
-        df['snr'] = np.abs(df['amplitude_percent']) / (baseline_mad * 100)
+        # Add small epsilon to prevent division by zero/near-zero
+        df['snr'] = np.abs(df['amplitude_percent']) / np.maximum(baseline_mad * 100, 1e-10)
+        # Replace inf values with NaN
+        df['snr'] = df['snr'].replace([np.inf, -np.inf], np.nan)
     else:
         df['snr'] = np.nan
     
@@ -847,6 +864,13 @@ def align_events(events, pre_ms, post_ms, amp_min, snr_min, min_pre_ms=50.0,
     total_passed = sum(len(d['aligned']) for d in out.values())
     logger.info(f"  Total events passed: {total_passed}")
     
+    # Log per-GEVI results
+    logger.info(f"Events passed per GEVI:")
+    for gevi in sorted(out.keys()):
+        n_events = len(out[gevi]['aligned'])
+        n_rois = out[gevi]['n_rois']
+        logger.info(f"    {gevi}: {n_events} events from {n_rois} ROIs")
+    
     if total_passed == 0:
         logger.warning("No events passed all filters!")
         
@@ -955,7 +979,9 @@ def stats_models(per_event: pd.DataFrame, per_roi: pd.DataFrame,
         logger.warning("statsmodels not available, using basic FDR correction")
         def fdrcorrection(pvals, alpha=0.05):
             from scipy.stats import false_discovery_control
-            return false_discovery_control(pvals, alpha=alpha), false_discovery_control(pvals, alpha=alpha)
+            corrected = false_discovery_control(pvals)
+            reject = corrected < alpha
+            return reject, corrected
     
     # Pairwise comparisons
     for metric in metrics:
@@ -1471,6 +1497,8 @@ def create_half_violin_plot(ax: plt.Axes, data: pd.DataFrame, metric: str,
     
     for i, group in enumerate(groups):
         group_data = data[data[group_col] == group][metric].dropna()
+        # Additional filtering for inf values
+        group_data = group_data[np.isfinite(group_data)]
         
         if len(group_data) == 0:
             continue
@@ -1484,7 +1512,9 @@ def create_half_violin_plot(ax: plt.Axes, data: pd.DataFrame, metric: str,
             pc.set_facecolor(color)
             pc.set_alpha(0.6)
             # Make it half violin by modifying vertices
-            vertices = pc.get_paths()[0].vertices
+            paths = pc.get_paths()
+            if len(paths) > 0:
+                vertices = paths[0].vertices
             vertices[:, 0] = np.clip(vertices[:, 0], i, i + 0.4)
         
         # Raw points (jittered)
@@ -1606,109 +1636,267 @@ def create_effect_size_plot(ax: plt.Axes, stats_results: Dict, gevis: List[str])
     ax.set_title('Effect Sizes with 95% CIs')
 
 
-def create_supplementary_figures(per_event: pd.DataFrame, per_roi: pd.DataFrame,
-                                color_map: Dict, config: Dict) -> plt.Figure:
-    """Create supplementary figures."""
+def create_event_count_distribution(ax: plt.Axes, per_event: pd.DataFrame, 
+                                   per_roi: pd.DataFrame, color_map: Dict):
+    """Create violin plot of event counts per ROI."""
+    gevis = sorted(per_roi['gevi'].unique())
     
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle('Supplementary Analyses', fontsize=14)
+    data_list = []
+    positions = []
+    colors_list = []
     
-    # QC panel
-    ax = axes[0, 0]
-    if 'baseline_brightness' in per_roi.columns:
-        for gevi in sorted(per_roi['gevi'].unique()):
-            data = per_roi[per_roi['gevi'] == gevi]['baseline_brightness'].dropna()
-            ax.hist(data, alpha=0.5, label=gevi, bins=20, 
-                   color=color_map.get(gevi, 'gray'))
-        ax.set_xlabel('Baseline Brightness')
-        ax.set_ylabel('ROI Count')
-        ax.set_title('QC: Baseline Brightness')
-        ax.legend()
+    for i, gevi in enumerate(gevis):
+        roi_events = per_event[per_event['gevi'] == gevi].groupby('roi').size()
+        if len(roi_events) > 0:
+            data_list.append(roi_events.values)
+            positions.append(i)
+            colors_list.append(color_map.get(gevi, 'gray'))
     
-    # ECDF plots
-    ax = axes[0, 1]
-    for gevi in sorted(per_event['gevi'].unique()):
-        data = per_event[per_event['gevi'] == gevi]['amplitude_percent'].dropna()
-        if len(data) > 0:
-            x_sorted = np.sort(data)
-            y = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
-            ax.plot(x_sorted, y, label=gevi, color=color_map.get(gevi, 'gray'))
-    ax.set_xlabel('Amplitude ΔF/F (%)')
-    ax.set_ylabel('Cumulative Probability')
-    ax.set_title('Empirical CDFs')
-    ax.legend()
+    if data_list:
+        parts = ax.violinplot(data_list, positions=positions, widths=0.7, 
+                             showmeans=True, showmedians=True)
+        
+        # Color the violins
+        for patch, color in zip(parts['bodies'], colors_list):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+            patch.set_edgecolor('black')
+            patch.set_linewidth(1.5)
+        
+        # Style the other elements
+        for partname in ('cbars', 'cmins', 'cmaxes', 'cmedians', 'cmeans'):
+            if partname in parts:
+                parts[partname].set_edgecolor('black')
+                parts[partname].set_linewidth(1.5)
     
-    # Distribution comparisons
-    ax = axes[1, 0]
-    create_distribution_comparison(ax, per_event, 'amplitude_percent', color_map)
-    
-    # Sample size summary
-    ax = axes[1, 1]
-    create_sample_size_summary(ax, per_event, per_roi, color_map)
-    
-    plt.tight_layout()
-    return fig
+    ax.set_xticks(positions)
+    ax.set_xticklabels(gevis, fontsize=11)
+    ax.set_ylabel('Events per ROI', fontsize=11)
+    ax.set_title('Event Count Distribution', fontsize=12, fontweight='bold')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, axis='y', linestyle='--')
 
 
-def create_distribution_comparison(ax: plt.Axes, data: pd.DataFrame, 
-                                 metric: str, color_map: Dict):
-    """Create distribution comparison using shift functions."""
+def create_improved_sample_size_summary(ax: plt.Axes, per_event: pd.DataFrame, 
+                                       per_roi: pd.DataFrame, color_map: Dict):
+    """Create improved sample size summary with better visualization."""
+    gevis = sorted(per_event['gevi'].unique())
+    x_pos = np.arange(len(gevis))
     
+    event_counts = [len(per_event[per_event['gevi'] == gevi]) for gevi in gevis]
+    roi_counts = [len(per_roi[per_roi['gevi'] == gevi]) for gevi in gevis]
+    
+    width = 0.35
+    
+    # Create bars with GEVI-specific colors
+    bars1 = ax.bar(x_pos - width/2, event_counts, width, label='Events', 
+                   alpha=0.8, edgecolor='black', linewidth=1.5)
+    bars2 = ax.bar(x_pos + width/2, roi_counts, width, label='ROIs', 
+                   alpha=0.6, edgecolor='black', linewidth=1.5, hatch='//')
+    
+    # Color bars by GEVI
+    for i, gevi in enumerate(gevis):
+        bars1[i].set_facecolor(color_map.get(gevi, 'gray'))
+        bars2[i].set_facecolor(color_map.get(gevi, 'gray'))
+    
+    ax.set_ylabel('Count', fontsize=11)
+    ax.set_title('Sample Sizes', fontsize=12, fontweight='bold')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(gevis, fontsize=11)
+    ax.legend(frameon=True, fancybox=True, shadow=True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, axis='y', linestyle='--')
+    
+    # Add count labels on bars
+    for i, (events, rois) in enumerate(zip(event_counts, roi_counts)):
+        ax.text(i - width/2, events + max(event_counts) * 0.02, str(events), 
+                ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax.text(i + width/2, rois + max(event_counts) * 0.02, str(rois), 
+                ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+
+def create_improved_shift_function(ax: plt.Axes, data: pd.DataFrame, 
+                                  metric: str, color_map: Dict):
+    """Create improved distribution comparison using shift functions."""
     gevis = sorted(data['gevi'].unique())
     if len(gevis) < 2:
+        ax.text(0.5, 0.5, 'Need ≥2 GEVIs for comparison', 
+                ha='center', va='center', transform=ax.transAxes)
         return
 
-    # Simple quantile comparison
     quantiles = np.linspace(0.1, 0.9, 9)
     
     for i in range(len(gevis) - 1):
         gevi1, gevi2 = gevis[i], gevis[i + 1]
         data1 = data[data['gevi'] == gevi1][metric].dropna()
         data2 = data[data['gevi'] == gevi2][metric].dropna()
+        data1 = data1[np.isfinite(data1)]
+        data2 = data2[np.isfinite(data2)]
         
         if len(data1) > 0 and len(data2) > 0:
             q1 = np.quantile(data1, quantiles)
             q2 = np.quantile(data2, quantiles)
             differences = q2 - q1
             
-            ax.plot(quantiles * 100, differences, 'o-', 
-                   label=f'{gevi2} - {gevi1}', alpha=0.7)
+            # Use a color gradient or distinct colors for each comparison
+            color = color_map.get(gevi2, 'gray')
+            ax.plot(quantiles * 100, differences, 'o-', linewidth=2.5,
+                   markersize=8, label=f'{gevi2} - {gevi1}', alpha=0.8, color=color)
+            
+            # Add zero-crossing annotation
+            if np.any(differences > 0) and np.any(differences < 0):
+                # Find approximate crossing point
+                sign_changes = np.where(np.diff(np.sign(differences)))[0]
+                for idx in sign_changes:
+                    cross_q = quantiles[idx] * 100
+                    ax.axvline(cross_q, color=color, linestyle=':', alpha=0.5, linewidth=1)
     
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
-    ax.set_xlabel('Quantile (%)')
-    ax.set_ylabel(f'Difference in {metric}')
-    ax.set_title('Shift Function')
-    ax.legend()
+    ax.axhline(0, color='black', linestyle='--', alpha=0.7, linewidth=2, label='No difference')
+    ax.set_xlabel('Quantile (%)', fontsize=11)
+    ax.set_ylabel(f'Difference in {metric.replace("_", " ").title()}', fontsize=11)
+    ax.set_title('Shift Function', fontsize=12, fontweight='bold')
+    ax.legend(frameon=True, fancybox=True, shadow=True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, linestyle='--')
 
 
-def create_sample_size_summary(ax: plt.Axes, per_event: pd.DataFrame, 
+def create_cv_comparison(ax: plt.Axes, per_event: pd.DataFrame, 
                               per_roi: pd.DataFrame, color_map: Dict):
-    """Create sample size summary plot."""
+    """Create coefficient of variation comparison across GEVIs."""
+    gevis = sorted(per_roi['gevi'].unique())
+    
+    metrics = []
+    labels = []
+    colors = []
+    
+    for gevi in gevis:
+        gevi_data = per_roi[per_roi['gevi'] == gevi]
+        
+        # Calculate CV for amplitude
+        if 'amplitude_cv' in gevi_data.columns:
+            cv_data = gevi_data['amplitude_cv'].dropna()
+            cv_data = cv_data[np.isfinite(cv_data)]
+            if len(cv_data) > 0:
+                metrics.append(np.median(cv_data))
+                labels.append(f'{gevi}\nAmplitude')
+                colors.append(color_map.get(gevi, 'gray'))
+    
+    if metrics:
+        x_pos = np.arange(len(metrics))
+        bars = ax.bar(x_pos, metrics, color=colors, alpha=0.8, 
+                     edgecolor='black', linewidth=1.5)
+        
+    ax.set_xticks(x_pos)
+        ax.set_xticklabels(labels, fontsize=10)
+        ax.set_ylabel('Coefficient of Variation', fontsize=11)
+        ax.set_title('Signal Variability (CV)', fontsize=12, fontweight='bold')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(True, alpha=0.3, axis='y', linestyle='--')
+        
+        # Add value labels
+        for i, (bar, val) in enumerate(zip(bars, metrics)):
+            ax.text(bar.get_x() + bar.get_width()/2, val + max(metrics) * 0.02, 
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    else:
+        ax.text(0.5, 0.5, 'CV data not available', ha='center', va='center', 
+                transform=ax.transAxes)
+
+
+def create_width_amplitude_density(ax: plt.Axes, per_event: pd.DataFrame, color_map: Dict):
+    """Create 2D density plot of width vs amplitude."""
+    gevis = sorted(per_event['gevi'].unique())
+    
+    for gevi in gevis:
+        gevi_data = per_event[per_event['gevi'] == gevi]
+        width = gevi_data['width_ms'].dropna()
+        amp = gevi_data['amplitude_percent'].dropna()
+        
+        # Get matching indices
+        valid_idx = gevi_data['width_ms'].notna() & gevi_data['amplitude_percent'].notna()
+        width = gevi_data.loc[valid_idx, 'width_ms']
+        amp = gevi_data.loc[valid_idx, 'amplitude_percent']
+        
+        width = width[np.isfinite(width)]
+        amp = amp[np.isfinite(amp)]
+        
+        if len(width) > 0 and len(amp) > 0:
+            # Plot scatter with alpha
+            ax.scatter(width, amp, alpha=0.4, s=20, 
+                      color=color_map.get(gevi, 'gray'), label=gevi, edgecolors='none')
+            
+            # Add median crosshair
+            med_w = np.median(width)
+            med_a = np.median(amp)
+            ax.plot(med_w, med_a, marker='*', markersize=15, 
+                   color=color_map.get(gevi, 'gray'), markeredgecolor='black', 
+                   markeredgewidth=1.5, zorder=10)
+    
+    ax.set_xlabel('Width (ms)', fontsize=11)
+    ax.set_ylabel('Amplitude ΔF/F (%)', fontsize=11)
+    ax.set_title('Width vs Amplitude', fontsize=12, fontweight='bold')
+    ax.legend(frameon=True, fancybox=True, shadow=True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, linestyle='--')
+
+
+def create_supplementary_figures(per_event: pd.DataFrame, per_roi: pd.DataFrame,
+                                color_map: Dict, config: Dict) -> plt.Figure:
+    """Create supplementary figures."""
+    
+    fig = plt.figure(figsize=(16, 10))
+    gs = GridSpec(2, 3, figure=fig, hspace=0.3, wspace=0.3)
+    fig.suptitle('Supplementary Analyses', fontsize=16, y=0.98)
     
     gevis = sorted(per_event['gevi'].unique())
-    x_pos = np.arange(len(gevis))
     
-    # Events per GEVI
-    event_counts = [len(per_event[per_event['gevi'] == gevi]) for gevi in gevis]
-    roi_counts = [len(per_roi[per_roi['gevi'] == gevi]) for gevi in gevis]
+    # Panel A: Event count distributions per ROI
+    ax = fig.add_subplot(gs[0, 0])
+    create_event_count_distribution(ax, per_event, per_roi, color_map)
     
-    width = 0.35
-    ax.bar(x_pos - width/2, event_counts, width, label='Events', alpha=0.7)
-    ax.bar(x_pos + width/2, roi_counts, width, label='ROIs', alpha=0.7)
+    # Panel B: ECDF plots  
+    ax = fig.add_subplot(gs[0, 1])
+    for gevi in gevis:
+        data = per_event[per_event['gevi'] == gevi]['amplitude_percent'].dropna()
+        data = data[np.isfinite(data)]
+        if len(data) > 0:
+            x_sorted = np.sort(data)
+            y = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
+            ax.plot(x_sorted, y, label=gevi, color=color_map.get(gevi, 'gray'), linewidth=2)
+    ax.set_xlabel('Amplitude ΔF/F (%)', fontsize=11)
+    ax.set_ylabel('Cumulative Probability', fontsize=11)
+    ax.set_title('Empirical CDFs', fontsize=12, fontweight='bold')
+    ax.legend(frameon=True, fancybox=True, shadow=True)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
     
-    ax.set_xlabel('GEVI')
-    ax.set_ylabel('Count')
-    ax.set_title('Sample Sizes')
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(gevis)
-    ax.legend()
+    # Panel C: Sample size summary
+    ax = fig.add_subplot(gs[0, 2])
+    create_improved_sample_size_summary(ax, per_event, per_roi, color_map)
     
-    # Add count labels
-    for i, (events, rois) in enumerate(zip(event_counts, roi_counts)):
-        ax.text(i - width/2, events + max(event_counts) * 0.01, str(events), 
-                ha='center', va='bottom', fontsize=8)
-        ax.text(i + width/2, rois + max(roi_counts) * 0.01, str(rois), 
-                ha='center', va='bottom', fontsize=8)
+    # Panel D: Distribution shift function
+    ax = fig.add_subplot(gs[1, 0])
+    create_improved_shift_function(ax, per_event, 'amplitude_percent', color_map)
+    
+    # Panel E: Coefficient of Variation comparison
+    ax = fig.add_subplot(gs[1, 1])
+    create_cv_comparison(ax, per_event, per_roi, color_map)
+    
+    # Panel F: Width vs Amplitude density
+    ax = fig.add_subplot(gs[1, 2])
+    if 'width_ms' in per_event.columns:
+        create_width_amplitude_density(ax, per_event, color_map)
+    else:
+        ax.text(0.5, 0.5, 'Width data not available', ha='center', va='center', transform=ax.transAxes)
+    
+    return fig
+
+
 
 
 def write_outputs(per_event: pd.DataFrame, per_roi: pd.DataFrame, 
