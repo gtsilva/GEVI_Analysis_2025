@@ -1427,53 +1427,53 @@ def create_main_comparison_figure(per_event: pd.DataFrame, per_roi: pd.DataFrame
                                 stats_results: Dict, color_map: Dict, config: Dict) -> plt.Figure:
     """Create main comparison figure with multiple panels."""
     
-    fig = plt.figure(figsize=(16, 12))
-    gs = GridSpec(3, 3, figure=fig, hspace=0.3, wspace=0.3)
+    fig = plt.figure(figsize=(18, 13))
+    gs = GridSpec(3, 3, figure=fig, hspace=0.35, wspace=0.35)
     
     gevis = sorted(per_event['gevi'].unique())
     
     # Panel A: Amplitude distribution
     ax_amp = fig.add_subplot(gs[0, 0])
-    create_half_violin_plot(ax_amp, per_event, 'amplitude_percent', 'gevi', 
+    create_improved_half_violin_plot(ax_amp, per_event, 'amplitude_percent', 'gevi', 
                            color_map, stats_results.get('amplitude_percent', {}))
-    ax_amp.set_ylabel('Amplitude ΔF/F (%)')
-    ax_amp.set_title('Event Amplitude')
+    ax_amp.set_ylabel('Amplitude ΔF/F (%)', fontsize=12, fontweight='bold')
+    ax_amp.set_title('Event Amplitude', fontsize=13, fontweight='bold', pad=10)
     
     # Panel B: Width distribution  
     ax_width = fig.add_subplot(gs[0, 1])
     if 'width_ms' in per_event.columns:
-        create_half_violin_plot(ax_width, per_event, 'width_ms', 'gevi',
+        create_improved_half_violin_plot(ax_width, per_event, 'width_ms', 'gevi',
                                color_map, stats_results.get('width_ms', {}))
-        ax_width.set_ylabel('Width (ms)')
-        ax_width.set_title('Event Width')
+        ax_width.set_ylabel('Width (ms)', fontsize=12, fontweight='bold')
+        ax_width.set_title('Event Width', fontsize=13, fontweight='bold', pad=10)
     
     # Panel C: SNR distribution
     ax_snr = fig.add_subplot(gs[0, 2])
     if 'snr' in per_event.columns:
-        create_half_violin_plot(ax_snr, per_event, 'snr', 'gevi',
+        create_improved_half_violin_plot(ax_snr, per_event, 'snr', 'gevi',
                                color_map, stats_results.get('snr', {}))
-        ax_snr.set_ylabel('SNR')
-        ax_snr.set_title('Signal-to-Noise Ratio')
+        ax_snr.set_ylabel('SNR', fontsize=12, fontweight='bold')
+        ax_snr.set_title('Signal-to-Noise Ratio', fontsize=13, fontweight='bold', pad=10)
     
-    # Panel D: Event rate - FIXED VERSION
+    # Panel D: Event rate
     ax_rate = fig.add_subplot(gs[1, 0])
-    create_half_violin_plot(ax_rate, per_roi, 'event_rate_hz', 'gevi',
+    create_improved_half_violin_plot(ax_rate, per_roi, 'event_rate_hz', 'gevi',
                            color_map, stats_results.get('event_rate_hz', {}))
-    ax_rate.set_ylabel('Event Rate (Hz)')
-    ax_rate.set_title('Event Rates per ROI')
+    ax_rate.set_ylabel('Event Rate (Hz)', fontsize=12, fontweight='bold')
+    ax_rate.set_title('Event Rates per ROI', fontsize=13, fontweight='bold', pad=10)
     
     # Panel E: Amplitude vs Width scatter
     ax_scatter = fig.add_subplot(gs[1, 1])
-    create_amplitude_width_scatter(ax_scatter, per_roi, color_map)
+    create_improved_amplitude_width_scatter(ax_scatter, per_roi, color_map)
     
     # Panel F: Rate vs SNR trade-off
     ax_trade = fig.add_subplot(gs[1, 2])
     if 'snr_median' in per_roi.columns:
-        create_rate_snr_scatter(ax_trade, per_roi, color_map)
+        create_improved_rate_snr_scatter(ax_trade, per_roi, color_map)
     
     # Panel G: Effect sizes
     ax_effects = fig.add_subplot(gs[2, :])
-    create_effect_size_plot(ax_effects, stats_results, gevis)
+    create_improved_effect_size_plot(ax_effects, stats_results, gevis, color_map)
     
     # Overall title with sample sizes
     sample_info = []
@@ -1483,9 +1483,235 @@ def create_main_comparison_figure(per_event: pd.DataFrame, per_roi: pd.DataFrame
         sample_info.append(f"{gevi}: {n_events} events, {n_rois} ROIs")
     
     fig.suptitle(f"GEVI Performance Comparison\n{' | '.join(sample_info)}", 
-                 fontsize=14, y=0.98)
+                 fontsize=16, y=0.995, fontweight='bold')
     
     return fig
+
+
+def create_improved_half_violin_plot(ax: plt.Axes, data: pd.DataFrame, metric: str, 
+                                    group_col: str, color_map: Dict, stats_dict: Dict):
+    """Create improved half-violin plot with raw points and confidence intervals."""
+    
+    groups = sorted(data[group_col].unique())
+    positions = np.arange(len(groups))
+    
+    for i, group in enumerate(groups):
+        group_data = data[data[group_col] == group][metric].dropna()
+        group_data = group_data[np.isfinite(group_data)]
+        
+        if len(group_data) == 0:
+            continue
+        
+        color = color_map.get(group, 'gray')
+        
+        # Half violin with better styling
+        parts = ax.violinplot([group_data], positions=[i], showmeans=False, 
+                             showmedians=False, showextrema=False, widths=0.65)
+        for pc in parts['bodies']:
+            pc.set_facecolor(color)
+            pc.set_alpha(0.7)
+            pc.set_edgecolor('black')
+            pc.set_linewidth(1.5)
+            # Make it half violin
+            paths = pc.get_paths()
+            if len(paths) > 0:
+                vertices = paths[0].vertices
+                vertices[:, 0] = np.clip(vertices[:, 0], i, i + 0.45)
+        
+        # Raw points (jittered) with better styling
+        jitter = np.random.normal(0, 0.04, len(group_data))
+        ax.scatter(i + 0.55 + jitter, group_data, alpha=0.5, s=12, 
+                  color=color, edgecolors='white', linewidth=0.5)
+        
+        # Median and CI with better visibility
+        if group in stats_dict.get('groups', {}):
+            group_stats = stats_dict['groups'][group]
+            median = group_stats['median']
+            ci_low = group_stats['ci_lower']
+            ci_high = group_stats['ci_upper']
+            
+            # Median line (thicker)
+            ax.plot([i + 0.65, i + 0.9], [median, median], 'k-', linewidth=3, zorder=10)
+            # CI line
+            ax.plot([i + 0.775, i + 0.775], [ci_low, ci_high], 'k-', linewidth=2, zorder=10)
+            # CI caps
+            cap_width = 0.04
+            ax.plot([i + 0.775 - cap_width, i + 0.775 + cap_width], [ci_low, ci_low], 
+                   'k-', linewidth=2, zorder=10)
+            ax.plot([i + 0.775 - cap_width, i + 0.775 + cap_width], [ci_high, ci_high], 
+                   'k-', linewidth=2, zorder=10)
+        
+        # Sample size annotation (better positioned)
+        y_max = ax.get_ylim()[1]
+        ax.text(i, y_max, f'n={len(group_data)}', 
+                ha='center', va='bottom', fontsize=9, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                         edgecolor='gray', alpha=0.8))
+    
+    ax.set_xticks(positions)
+    ax.set_xticklabels(groups, rotation=0, fontsize=11)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, axis='y', linestyle='--', zorder=0)
+
+
+def create_improved_amplitude_width_scatter(ax: plt.Axes, per_roi: pd.DataFrame, color_map: Dict):
+    """Create improved amplitude vs width scatter plot."""
+    
+    if 'width_median' not in per_roi.columns:
+        ax.text(0.5, 0.5, 'Width data not available', ha='center', va='center', 
+                transform=ax.transAxes, fontsize=12)
+        return
+
+    for gevi in sorted(per_roi['gevi'].unique()):
+        data = per_roi[per_roi['gevi'] == gevi]
+        ax.scatter(data['width_median'], data['amplitude_median'], 
+                  alpha=0.7, s=60, color=color_map.get(gevi, 'gray'), 
+                  label=gevi, edgecolors='white', linewidths=1)
+        
+        # Group median marker with annotation
+        if len(data) > 0:
+            median_x = data['width_median'].median()
+            median_y = data['amplitude_median'].median()
+            ax.scatter(median_x, median_y, s=200, marker='*', 
+                      color='black', edgecolor='white', linewidth=2, zorder=10)
+            # Add label near the star
+            ax.annotate(gevi, (median_x, median_y), xytext=(5, 5), 
+                       textcoords='offset points', fontsize=9, fontweight='bold',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                edgecolor=color_map.get(gevi, 'gray'), alpha=0.9))
+    
+    ax.set_xlabel('Width median (ms)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Amplitude median ΔF/F (%)', fontsize=12, fontweight='bold')
+    ax.set_title('ROI-level Amplitude vs Width', fontsize=13, fontweight='bold', pad=10)
+    ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=10)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, linestyle='--')
+
+
+def create_improved_rate_snr_scatter(ax: plt.Axes, per_roi: pd.DataFrame, color_map: Dict):
+    """Create improved event rate vs SNR scatter plot."""
+    
+    for gevi in sorted(per_roi['gevi'].unique()):
+        data = per_roi[per_roi['gevi'] == gevi]
+        valid_data = data.dropna(subset=['event_rate_hz', 'snr_median'])
+        
+        if len(valid_data) > 0:
+            ax.scatter(valid_data['event_rate_hz'], valid_data['snr_median'],
+                      alpha=0.7, s=60, color=color_map.get(gevi, 'gray'), 
+                      label=gevi, edgecolors='white', linewidths=1)
+    
+    ax.set_xlabel('Event Rate (Hz)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('SNR median', fontsize=12, fontweight='bold')
+    ax.set_title('Rate vs SNR Trade-off', fontsize=13, fontweight='bold', pad=10)
+    ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=10)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, linestyle='--', which='both')
+    
+    # Improve tick formatting for better readability
+    from matplotlib.ticker import ScalarFormatter
+    ax.xaxis.set_major_formatter(ScalarFormatter())
+    ax.yaxis.set_major_formatter(ScalarFormatter())
+    ax.ticklabel_format(style='plain', axis='both')
+
+
+def create_improved_effect_size_plot(ax: plt.Axes, stats_results: Dict, gevis: List[str], color_map: Dict):
+    """Create improved effect size forest plot."""
+    
+    metrics = ['amplitude_percent', 'width_ms', 'snr', 'event_rate_hz']
+    metric_labels = ['Amplitude (%)', 'Width (ms)', 'SNR', 'Rate (Hz)']
+    metric_symbols = ['Δ', 'W', 'S', 'R']
+    
+    y_pos = []
+    labels = []
+    effects = []
+    ci_lows = []
+    ci_highs = []
+    colors_list = []
+    markers = []
+    
+    y = 0
+    metric_spacing = 0.3  # Space between metric groups
+    
+    for metric_idx, (metric, label, symbol) in enumerate(zip(metrics, metric_labels, metric_symbols)):
+        if metric not in stats_results:
+            continue
+        
+        pairwise = stats_results[metric].get('pairwise', [])
+        if not pairwise:
+            continue
+        
+        # Add metric group label
+        if y > 0:
+            y += metric_spacing
+        
+        for comp in pairwise:
+            y_pos.append(y)
+            # Simplified label
+            labels.append(f"{comp['gevi2']} - {comp['gevi1']}")
+            effects.append(comp['effect_size'])
+            ci_lows.append(comp['effect_ci_lower'])
+            ci_highs.append(comp['effect_ci_upper'])
+            
+            # Color and marker based on significance
+            p_val = comp.get('mw_p_fdr', comp.get('mw_p', 1.0))
+            if p_val < 0.001:
+                colors_list.append('darkred')
+                markers.append('D')  # Diamond
+            elif p_val < 0.01:
+                colors_list.append('red')
+                markers.append('o')
+            elif p_val < 0.05:
+                colors_list.append('orange')
+                markers.append('o')
+            else:
+                colors_list.append('gray')
+                markers.append('o')
+            y += 1
+    
+    if not effects:
+        ax.text(0.5, 0.5, 'No effect size data available', 
+                ha='center', va='center', transform=ax.transAxes, fontsize=12)
+        return
+    
+    # Plot effect sizes with CIs
+    for i, (effect, y_val, ci_low, ci_high, color, marker) in enumerate(
+            zip(effects, y_pos, ci_lows, ci_highs, colors_list, markers)):
+        # CI line
+        ax.plot([ci_low, ci_high], [y_val, y_val], color=color, linewidth=2, alpha=0.7)
+        # Point estimate
+        ax.scatter([effect], [y_val], s=100, color=color, marker=marker, 
+                  edgecolors='black', linewidths=1.5, zorder=10, alpha=0.9)
+    
+    # Add vertical line at zero
+    ax.axvline(0, color='black', linestyle='--', alpha=0.5, linewidth=2, zorder=0)
+    
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=10)
+    ax.set_xlabel('Effect Size (Difference in Medians)', fontsize=12, fontweight='bold')
+    ax.set_title('Effect Sizes with 95% CIs', fontsize=13, fontweight='bold', pad=10)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, axis='x', linestyle='--')
+    
+    # Add legend for significance levels
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='darkred', 
+               markersize=8, label='p < 0.001', markeredgecolor='black'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', 
+               markersize=8, label='p < 0.01', markeredgecolor='black'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', 
+               markersize=8, label='p < 0.05', markeredgecolor='black'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', 
+               markersize=8, label='n.s.', markeredgecolor='black')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', frameon=True, 
+             fancybox=True, shadow=True, fontsize=9)
 
 
 def create_half_violin_plot(ax: plt.Axes, data: pd.DataFrame, metric: str, 
@@ -1728,36 +1954,46 @@ def create_improved_shift_function(ax: plt.Axes, data: pd.DataFrame,
 
     quantiles = np.linspace(0.1, 0.9, 9)
     
-    for i in range(len(gevis) - 1):
-        gevi1, gevi2 = gevis[i], gevis[i + 1]
-        data1 = data[data['gevi'] == gevi1][metric].dropna()
-        data2 = data[data['gevi'] == gevi2][metric].dropna()
-        data1 = data1[np.isfinite(data1)]
-        data2 = data2[np.isfinite(data2)]
+    # Create all pairwise comparisons
+    line_styles = ['-', '--', '-.']
+    comparison_idx = 0
+    
+    for i in range(len(gevis)):
+        for j in range(i + 1, len(gevis)):
+            gevi1, gevi2 = gevis[i], gevis[j]
+            data1 = data[data['gevi'] == gevi1][metric].dropna()
+            data2 = data[data['gevi'] == gevi2][metric].dropna()
+            data1 = data1[np.isfinite(data1)]
+            data2 = data2[np.isfinite(data2)]
         
         if len(data1) > 0 and len(data2) > 0:
             q1 = np.quantile(data1, quantiles)
             q2 = np.quantile(data2, quantiles)
             differences = q2 - q1
             
-            # Use a color gradient or distinct colors for each comparison
+                # Use different line styles for different comparisons
+            line_style = line_styles[comparison_idx % len(line_styles)]
             color = color_map.get(gevi2, 'gray')
-            ax.plot(quantiles * 100, differences, 'o-', linewidth=2.5,
-                   markersize=8, label=f'{gevi2} - {gevi1}', alpha=0.8, color=color)
-            
-            # Add zero-crossing annotation
+                
+            ax.plot(quantiles * 100, differences, marker='o', linestyle=line_style, 
+                       linewidth=2.5, markersize=8, label=f'{gevi2} - {gevi1}', 
+                       alpha=0.8, color=color)
+                
+                # Add zero-crossing annotation
             if np.any(differences > 0) and np.any(differences < 0):
-                # Find approximate crossing point
-                sign_changes = np.where(np.diff(np.sign(differences)))[0]
-                for idx in sign_changes:
-                    cross_q = quantiles[idx] * 100
-                    ax.axvline(cross_q, color=color, linestyle=':', alpha=0.5, linewidth=1)
+                    # Find approximate crossing point
+                    sign_changes = np.where(np.diff(np.sign(differences)))[0]
+                    for idx in sign_changes:
+                        cross_q = quantiles[idx] * 100
+                        ax.axvline(cross_q, color=color, linestyle=':', alpha=0.3, linewidth=1)
+                
+                    comparison_idx += 1
     
     ax.axhline(0, color='black', linestyle='--', alpha=0.7, linewidth=2, label='No difference')
     ax.set_xlabel('Quantile (%)', fontsize=11)
     ax.set_ylabel(f'Difference in {metric.replace("_", " ").title()}', fontsize=11)
-    ax.set_title('Shift Function', fontsize=12, fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
+    ax.set_title('Shift Function (All Pairwise)', fontsize=12, fontweight='bold')
+    ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.grid(True, alpha=0.3, linestyle='--')
@@ -1789,7 +2025,7 @@ def create_cv_comparison(ax: plt.Axes, per_event: pd.DataFrame,
         bars = ax.bar(x_pos, metrics, color=colors, alpha=0.8, 
                      edgecolor='black', linewidth=1.5)
         
-    ax.set_xticks(x_pos)
+        ax.set_xticks(x_pos)
         ax.set_xticklabels(labels, fontsize=10)
         ax.set_ylabel('Coefficient of Variation', fontsize=11)
         ax.set_title('Signal Variability (CV)', fontsize=12, fontweight='bold')
