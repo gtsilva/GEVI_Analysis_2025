@@ -16,6 +16,11 @@ Method:
   5) Detect peaks above threshold with width ≥ 1 ms at half-prominence.
   6) Save per-ROI event CSVs and comprehensive summary plots.
 
+Performance Notes:
+  - Cellpose forced to CPU to avoid MPS hangs on macOS
+  - Diameter estimation optimized (reduced iterations, skipped slow auto-correlation)
+  - Progress messages added to help identify hang points
+
 CLI:
   python simple_conservative_extract_fluo.py --source rig --data-dir /path/to/experiment
   python simple_conservative_extract_fluo.py --source tiff --tif /path/to/stack.tif
@@ -588,13 +593,15 @@ def _estimate_diam_px(I, quality_metrics=None):
     if quality_metrics is None:
         quality_metrics = _assess_image_quality(I)
     
-    # Method 1: Multi-scale LoG blob detection with adaptive thresholds
+    # Method 1: Multi-scale LoG blob detection with adaptive thresholds (reduced iterations for speed)
     snr = quality_metrics.get('snr_estimate', 3.0)
     base_thresh = max(0.001, 0.01 / snr)  # Adapt threshold to SNR
     
-    for i, thresh in enumerate([base_thresh * f for f in [0.5, 1.0, 2.0, 4.0]]):
+    # Reduced to 2 threshold values for faster execution
+    for i, thresh in enumerate([base_thresh * f for f in [1.0, 2.0]]):
         try:
-            blobs = feature.blob_log(I2, min_sigma=0.8, max_sigma=12, num_sigma=20, threshold=thresh)
+            # Reduced num_sigma from 20 to 12 for faster execution
+            blobs = feature.blob_log(I2, min_sigma=0.8, max_sigma=12, num_sigma=12, threshold=thresh)
             if blobs.size >= 4:  # Need sufficient blobs for reliable estimate
                 diameters = blobs[:, 2] * np.sqrt(2.0) * 2.0
                 # Filter out outliers
@@ -607,11 +614,12 @@ def _estimate_diam_px(I, quality_metrics=None):
                     estimates.append(est)
                     weights.append(weight)
                     print(f"LoG (thresh={thresh:.4f}): {len(blobs)} blobs, {len(valid_diams)} valid, diameter={est:.1f}px")
+                    break  # Early exit if we found a good estimate
         except Exception as e:
             print(f"LoG method failed at threshold {thresh}: {e}")
     
-    # Method 2: Multi-threshold distance transform
-    for percentile in [75, 85, 95]:  # Try different foreground thresholds
+    # Method 2: Multi-threshold distance transform (reduced iterations)
+    for percentile in [85]:  # Try only one percentile for speed
         try:
             threshold = np.percentile(I2, percentile)
             m = I2 > threshold
@@ -627,6 +635,7 @@ def _estimate_diam_px(I, quality_metrics=None):
                     estimates.append(est)
                     weights.append(weight)
                     print(f"Distance transform (p{percentile}): {m.sum()} fg pixels, diameter={est:.1f}px")
+                    break  # Early exit if successful
         except Exception as e:
             print(f"Distance transform failed at percentile {percentile}: {e}")
     
@@ -655,36 +664,41 @@ def _estimate_diam_px(I, quality_metrics=None):
     except Exception as e:
         print(f"Granulometry method failed: {e}")
     
-    # Method 4: Peak spacing in auto-correlation
-    try:
-        # Compute 2D auto-correlation
-        I_centered = I2 - np.mean(I2)
-        autocorr = signal.fftconvolve(I_centered, I_centered[::-1, ::-1], mode='same')
-        autocorr = autocorr / autocorr.max()
-        
-        # Find peaks in the central region
-        center = np.array(autocorr.shape) // 2
-        search_radius = min(center) // 2
-        y_slice = slice(center[0] - search_radius, center[0] + search_radius)
-        x_slice = slice(center[1] - search_radius, center[1] + search_radius)
-        autocorr_crop = autocorr[y_slice, x_slice]
-        
-        # Find local maxima
-        peaks = peak_local_maxima(autocorr_crop, min_distance=3, threshold_abs=0.1)
-        if len(peaks) > 1:
-            # Calculate distances from center
-            center_crop = np.array(autocorr_crop.shape) // 2
-            distances = np.sqrt(np.sum((peaks - center_crop)**2, axis=1))
-            distances = distances[distances > 2]  # Exclude central peak
-            if len(distances) > 0:
-                typical_spacing = np.median(distances)
-                est = float(typical_spacing * 2.0)  # Spacing to diameter
-                weight = 0.6
-                estimates.append(est)
-                weights.append(weight)
-                print(f"Auto-correlation: spacing={typical_spacing:.1f}, diameter={est:.1f}px")
-    except Exception as e:
-        print(f"Auto-correlation method failed: {e}")
+    # Method 4: Peak spacing in auto-correlation (SKIPPED - too slow, can cause hangs)
+    # This method is disabled by default because fftconvolve can be very slow on large images
+    # and may cause the script to appear to hang
+    if False:  # Set to True only if you have small images and need maximum accuracy
+        try:
+            # Compute 2D auto-correlation
+            I_centered = I2 - np.mean(I2)
+            autocorr = signal.fftconvolve(I_centered, I_centered[::-1, ::-1], mode='same')
+            autocorr = autocorr / autocorr.max()
+            
+            # Find peaks in the central region
+            center = np.array(autocorr.shape) // 2
+            search_radius = min(center) // 2
+            y_slice = slice(center[0] - search_radius, center[0] + search_radius)
+            x_slice = slice(center[1] - search_radius, center[1] + search_radius)
+            autocorr_crop = autocorr[y_slice, x_slice]
+            
+            # Find local maxima
+            peaks = peak_local_maxima(autocorr_crop, min_distance=3, threshold_abs=0.1)
+            if len(peaks) > 1:
+                # Calculate distances from center
+                center_crop = np.array(autocorr_crop.shape) // 2
+                distances = np.sqrt(np.sum((peaks - center_crop)**2, axis=1))
+                distances = distances[distances > 2]  # Exclude central peak
+                if len(distances) > 0:
+                    typical_spacing = np.median(distances)
+                    est = float(typical_spacing * 2.0)  # Spacing to diameter
+                    weight = 0.6
+                    estimates.append(est)
+                    weights.append(weight)
+                    print(f"Auto-correlation: spacing={typical_spacing:.1f}, diameter={est:.1f}px")
+        except Exception as e:
+            print(f"Auto-correlation method failed: {e}")
+    else:
+        print("Auto-correlation: skipped (disabled for speed)")
     
     # Method 5: Adaptive fallback based on image characteristics
     img_size = min(I2.shape)
@@ -1075,8 +1089,8 @@ def _score_cellpose_result(masks, ref_img, diameter_px, model_type, img_variant)
 def _segment_cellpose(I, d_px):
     """MPS-safe Cellpose v4 segmentation on a 2D reference image."""
     try:
-        # Choose device (auto)
-        device = pick_device("auto")
+        # Force CPU to avoid MPS hangs on macOS - more reliable than auto
+        device = torch.device("cpu")
         try:
             torch.set_num_threads(1)
         except Exception:
@@ -1084,12 +1098,14 @@ def _segment_cellpose(I, d_px):
         print(f"[cellpose] torch {torch.__version__}, device={device.type}")
 
         # Build v4 model with pretrained weights; no model_type
+        print("[cellpose] Loading cyto3 model (this may take a moment on first run)...")
         try:
             cp = models.CellposeModel(
                 gpu=False,
                 device=device,
                 pretrained_model="cyto3"
             )
+            print("[cellpose] Model loaded successfully")
         except Exception as e:
             raise RuntimeError(f"Cellpose init failed on {device}: {e}")
 
@@ -1111,6 +1127,7 @@ def _segment_cellpose(I, d_px):
         except Exception:
             cp_diam = 0.0
 
+        print(f"[cellpose] Running segmentation with diameter={cp_diam:.1f}px...")
         with torch.inference_mode():
             masks, flows, styles = cp.eval(
                 ref_img,
@@ -1120,6 +1137,7 @@ def _segment_cellpose(I, d_px):
                 flow_threshold=0.4,
                 cellprob_threshold=0.0
             )
+        print("[cellpose] Segmentation complete")
 
         if masks is None or (np.asarray(masks).max(initial=0) == 0):
             print("Cellpose produced no masks.")
@@ -1290,9 +1308,11 @@ def segment_cells(ref_img, backend="auto", diameter_px="auto", save_debug=None):
     
     # Estimate diameter with quality-aware methods
     if isinstance(diameter_px, str) and diameter_px.lower() == "auto":
+        print("Estimating cell diameter (this may take 10-30 seconds)...")
         d_est = _estimate_diam_px(I, quality_metrics)
     else:
         d_est = float(diameter_px)
+        print(f"Using user-specified diameter: {d_est:.1f}px")
     
     best_masks = np.zeros_like(I, np.int32)
     best_score = -1.0
@@ -1982,20 +2002,27 @@ def run_imaging_pipeline(args,
                         plot_summary: bool = True) -> Dict:
     """Pipeline for imaging data analysis with ROI extraction."""
     
+    print("\n" + "="*70)
+    print("STARTING IMAGING PIPELINE")
+    print("="*70)
+    
     # Setup output directories
+    print(f"Setting up output directory: {out_dir}")
     os.makedirs(out_dir, exist_ok=True)
     events_dir = Path(out_dir) / "events"
     roi_dir = Path(out_dir) / "roi_summaries"
     events_dir.mkdir(exist_ok=True)
     roi_dir.mkdir(exist_ok=True)
     
+    print(f"\nStep 1/5: Preparing imaging data (shape: {data_stack.frames.shape})")
     frames = data_stack.frames.astype(np.float32)
     if frames.max() > 0:
         frames /= frames.max()  # Normalize to [0,1]
     
     # Create reference image for segmentation
+    print(f"Creating {reference_method} projection for segmentation reference...")
     ref_img = build_reference(frames, method=reference_method)
-    print(f"Using {reference_method} projection for segmentation reference")
+    print(f"Reference image created: {ref_img.shape}")
     
     # Determine frame rate first (needed for segmentation)
     T = frames.shape[0]
@@ -2005,14 +2032,17 @@ def run_imaging_pipeline(args,
         fs = 1.0 / np.median(np.diff(data_stack.times))
     else:
         fs = 30.0  # Default fallback
+    print(f"Frame rate: {fs:.1f} Hz")
     
     # Use improved segmentation with intelligent backend selection
-    print(f"Running smart segmentation with backend={seg_backend}, diameter={diameter_px}")
+    print(f"\nStep 2/5: Running cell segmentation (backend={seg_backend}, diameter={diameter_px})")
+    print("This may take 30-120 seconds depending on image size and method...")
     debug_path = os.path.join(out_dir, "seg_debug.png") if save_roi_summaries else None
     masks = segment_cells(ref_img, 
                           backend=seg_backend, 
                           diameter_px=diameter_px,
                           save_debug=debug_path)
+    print("Segmentation complete!")
     
     has_cells = (masks is not None) and (np.asarray(masks).max(initial=0) > 0)
     if not has_cells:
@@ -2029,19 +2059,22 @@ def run_imaging_pipeline(args,
         }
     
     # Extract traces
+    print(f"\nStep 3/5: Extracting fluorescence traces from {np.max(masks)} ROIs...")
     traces_dict = extract_roi_traces(frames, masks)
     F_traces = traces_dict["F"]  # (N_cells, T)
     n_cells, T = F_traces.shape
+    print(f"Extracted {n_cells} traces with {T} time points")
     
     times = data_stack.times if data_stack.times is not None else np.arange(T) / fs
     
     # Process each ROI
+    print(f"\nStep 4/5: Detecting events in {n_cells} ROIs (this may take 1-3 min)...")
     all_events = {}
     event_counts = np.zeros(n_cells)
     event_rates = np.zeros(n_cells)
     eventful_rois = []
     
-    print(f"Processing {n_cells} ROIs at {fs:.1f} Hz...")
+    print(f"Processing at {fs:.1f} Hz with threshold={thresh_mult}σ, min_width={min_width_ms}ms")
     
     for roi_idx in range(n_cells):
         raw_trace = F_traces[roi_idx]
@@ -2084,6 +2117,7 @@ def run_imaging_pipeline(args,
               f"σ={events.noise_sigma:.4f}")
     
     # Create overlay plot
+    print(f"\nStep 5/5: Generating summary plots and saving results...")
     if plot_summary:
         overlay_path = Path(out_dir) / "overlay.png"
         save_overlay_plot(ref_img, masks, overlay_path)
