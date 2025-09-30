@@ -112,22 +112,9 @@ Example configuration file for `compare_gevis.py`:
 }
 ```
 
-## Analysis Results
+## Output Files
 
-Two analysis runs comparing ASAP voltage indicators:
-
-### `gevi_comparison/`
-Analysis of ASAP4, ASAP6.2, and ASAP6.3:
-- **Sample**: 4,034 events across 29 ROIs
-- **Date**: September 25, 2025
-- **Method**: 10,000 bootstrap iterations with BCa confidence intervals
-
-### `gevi_conservative_comparison/`
-Analysis with modified quality control parameters:
-- Alternative parameter settings
-- Modified thresholding and filtering criteria
-
-### Output Files (in each results directory):
+When you run `compare_gevis.py`, it generates a results directory containing:
 - **Figures**: `gevi_comparison_main.[png/pdf/svg]`, `gevi_comparison_supplement.[png/pdf]`, `gevi_spike_shape_comparison.[png/pdf/svg]`
 - **Data**: `summary_table.csv`, `per_event_metrics.csv`, `per_roi_metrics.csv`
 - **Metadata**: `statistical_results.json`, `run_metadata.json`, `analysis.log`, `README.txt`
